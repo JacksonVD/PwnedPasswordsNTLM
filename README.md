@@ -7,4 +7,4 @@ Note: requires that the input file be in Hashcat format (Username:Hash).
 For more details on how to extract the hashes, and further background, please see my post here - http://jacksonvd.com/pwned-passwords-and-ntlm-hashes
 
 # Usage
-PwnedPasswordsNTLM <Path to Dataset> <Input File Path> <Output File Path>
+PwnedPasswordsNTLM \<Path to Dataset> \<Input File Path> \<Output File Path>
