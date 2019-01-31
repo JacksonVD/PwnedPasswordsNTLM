@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 
 // Basic binary search to be used on a sorted Pwned Passwords dataset
+// - download the ordered by hash NTLM set from https://haveibeenpwned.com/passwords
 
 class PwnedPasswordsNTLM
 {
@@ -38,6 +39,7 @@ class PwnedPasswordsNTLM
                     {
                         // Output to the output file that the user has a breached password
                         outFile.WriteLine("{0} has a pwned password", line.Split(':')[0]);
+                        // NOTE: To speed up checking, you can get rid of this line.
                         Console.WriteLine("{0} has a pwned password", line.Split(':')[0]);
                     }
                 }
@@ -100,8 +102,8 @@ class PwnedPasswordsNTLM
             // Get the number of bytes in the file (position returns number of bytes)
             bytes = file.Position;
 
-            // Get total passwords by dividing by NTLM length + 2 - 1
-            totalPasswords = (bytes / 34) - 1;
+            // Get total passwords by dividing by NTLM length + 2
+            totalPasswords = (bytes / 34);
 
             // Initialise the upper bound
             upper = totalPasswords;
@@ -113,7 +115,7 @@ class PwnedPasswordsNTLM
                 Int64 position = (lower + upper + 1) / 2;
 
                 // Set buffer string to return value from GetRecord function
-                string buffer = getRecord(file, position);
+                string buffer = getRecord(file, position, searchValue);
 
                 // If the two values are equal..
                 if (searchValue.Equals(buffer))
@@ -162,14 +164,15 @@ class PwnedPasswordsNTLM
      *            The hash obtained from the required position
      */
 
-    static String getRecord(FileStream inFile, Int64 position)
+    static String getRecord(FileStream inFile, Int64 position, String searchVal)
     {
-        // Create buffer array of NTLM hash length + 1
         String record;
+
+        // Create buffer array of NTLM hash length + 1
         byte[] buffer = new byte[33];
 
         // Set the stream to the required hash start position
-        inFile.Seek(((long)(position) * 34), SeekOrigin.Begin);
+        inFile.Seek(((long)(position) * 34 ), SeekOrigin.Begin);
 
         // Read 32 chararacters (size of 1 NTLM hash) into the buffer byte array
         inFile.Read(buffer, 0, 32);
@@ -177,27 +180,78 @@ class PwnedPasswordsNTLM
         // Convert from byte array to string and remove null terminator character
         record = System.Text.Encoding.UTF8.GetString(buffer);
 
+        // Get the current file position, in case we need it further on
+        Int64 curr = inFile.Position;
+
         // In order to allow for users using the frequency of occurrences, this check
-        // is required - essentially scan for a \n in the current string. If it exists,
-        // it means that the entire hash in the current line has not been picked up - it has
-        // part of the hash before due to the frequency messing with the number of characters
-        if (record.Contains("\n"))
+        // is required - essentially scan for a \n or : in the current string. If these 
+        // characters exist, it means an incomplete hash was picked up.
+        // The frequency tends to mess with the easy pickup of the hash, so we need these extra checks
+        if (record.Contains("\n") || record.Contains(":"))
         {
             // Clear the buffer
             Array.Clear(buffer, 0, buffer.Length);
+            String origRecord = record;
 
-            // Anything before the \n in the string is a different hash
-            String oldHash = record.Split('\n')[0];
+            // Anything before the \n in the string is part of the hash we want to look at
+            String origHash = record.Split('\n')[0];
+            String oldHash = "";
 
-            // Get the hash length including the \n
-            int oldHashLength = oldHash.Length+1;
+            // If the original hash contains :, then it includes a frequency for the prior hash
+            if (origHash.Contains(":"))
+            {
+                oldHash = origHash.Split(':')[0];
 
-            // Read oldHashLength more characters into our buffer
-            inFile.Read(buffer, 0, oldHashLength);
+                // Move back to where the current hash would have started
+                inFile.Seek(((long)(position) * 34) - (32 - oldHash.Length), SeekOrigin.Begin);
 
-            // Get the part of the current hash that we already have, and append the rest of the hash
-            record = record.Split('\n')[1];
-            record = record + System.Text.Encoding.UTF8.GetString(buffer);
+                // Read the beginning of the hash into the buffer
+                inFile.Read(buffer, 0, (32 - oldHash.Length));
+
+                // Combine the start and end of the hash
+                record = System.Text.Encoding.UTF8.GetString(buffer) + oldHash;
+            }
+            // Otherwise, go forward instead of backward - the "original" hash would only contain the 
+            // frequency information in this case, so it is easier to get the next hash in the file.
+            else
+            {
+                // If \r exists in the hash, then more than one extra character needs to be read in
+                // (occasionally, only one character needs to be read in as the original buffer
+                //  would have been \n{some hash}.)
+                if (origHash.Contains("\r"))
+                {
+                    // The old hash will likely just contain the frequency information
+                    oldHash = origHash.Split('\r')[0];
+                    Array.Clear(buffer, 0, buffer.Length);
+
+                    // Get the hash length including the \r and \n (2 extra characters)
+                    int oldHashLength = oldHash.Length + 2;
+
+                    // Seek back to the original position as we will now be reading in extra characters
+                    inFile.Seek(curr, SeekOrigin.Begin);
+
+                    // Read oldHashLength more characters into our buffer
+                    inFile.Read(buffer, 0, oldHashLength);
+
+                    // Get the part of the current hash that we already have, and append the rest of the hash
+                    record = origRecord.Split('\n')[1];
+                    record = record + System.Text.Encoding.UTF8.GetString(buffer);
+
+                }
+                // If \r does not exist in the hash, then we only need one extra character.
+                else
+                {
+                    // Clear the buffer
+                    Array.Clear(buffer, 0, buffer.Length);
+
+                    // Read in one extra character
+                    inFile.Read(buffer, 0, 1);
+
+                    // Append the final character of the hash
+                    record = origRecord.Split('\n')[1];
+                    record = record + System.Text.Encoding.UTF8.GetString(buffer);
+                }
+            }
         }
 
         // Replace the NULL character with string.Empty
